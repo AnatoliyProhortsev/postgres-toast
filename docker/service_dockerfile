@@ -1,0 +1,32 @@
+# Базовый образ для сборки
+FROM golang:1.22 AS builder
+
+# Установка рабочей директории
+WORKDIR /app
+
+# Копирование go.mod и go.sum для загрузки зависимостей
+COPY go.mod go.sum ./
+
+# Загрузка зависимостей
+RUN go mod download
+
+# Копирование исходного кода
+COPY . .
+
+# Сборка приложения
+RUN CGO_ENABLED=0 GOOS=linux go build -o myapp ./cmd/main.go
+
+# Финальный образ
+FROM alpine:latest
+
+# Установка рабочей директории
+WORKDIR /app
+
+# Копирование скомпилированного бинарного файла из стадии сборки
+COPY --from=builder /app/myapp .
+
+# Открытие порта для сервиса (например, 8080)
+EXPOSE 8080
+
+# Команда для запуска сервиса
+CMD ["./myapp"]
