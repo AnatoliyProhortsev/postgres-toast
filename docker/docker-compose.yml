@@ -1,0 +1,42 @@
+version: '3.8'
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: postgres_dockerfile
+      args:
+        - PG_REPO=https://github.com/postgrespro/postgres.git
+        - PG_BRANCH=jsonb_toaster # PG_BRANCH=REL_17_STABLE
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: service_dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=
+      - POSTGRES_DB=postgres
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:

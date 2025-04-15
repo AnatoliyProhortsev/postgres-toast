@@ -1,0 +1,54 @@
+# Базовый образ
+FROM ubuntu:22.04
+
+# Установка зависимостей
+RUN apt-get update && apt-get install -y \
+    git \
+    build-essential \
+    libreadline-dev \
+    zlib1g-dev \
+    flex \
+    bison \
+    libxml2-dev \
+    libxslt-dev \
+    libssl-dev \
+    libpam0g-dev \
+    python3-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Аргумент для указания ссылки на репозиторий
+ARG PG_REPO
+
+# Аргумент для указания названия ветки
+ARG PG_BRANCH
+
+# Клонирование репозитория PostgreSQL и сборка
+RUN git clone --branch ${PG_BRANCH} --depth 2 ${PG_REPO} /postgres && \
+    cd /postgres && \
+    ./configure --prefix=/usr/local/pgsql && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && \
+    rm -rf /postgres
+
+# Создание пользователя и директорий
+RUN useradd -m -s /bin/bash postgres && \
+    mkdir -p /usr/local/pgsql/data && \
+    chown -R postgres:postgres /usr/local/pgsql
+
+# Установка переменных окружения
+ENV PATH=/usr/local/pgsql/bin:$PATH
+ENV PGDATA=/usr/local/pgsql/data
+
+# Переключение на пользователя postgres
+USER postgres
+
+# Инициализация базы данных
+RUN initdb -D /usr/local/pgsql/data
+
+# Открытие порта
+EXPOSE 5432
+
+# Команда для запуска PostgreSQL
+CMD ["postgres", "-D", "/usr/local/pgsql/data"]
