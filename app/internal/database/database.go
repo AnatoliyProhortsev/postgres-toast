@@ -8,7 +8,7 @@ import (
 )
 
 type Storage struct {
-	DB DB
+	DB *sql.DB
 }
 
 type DB interface {
@@ -16,17 +16,26 @@ type DB interface {
 	Close() error
 }
 
-func InitDB(connectionString string) (*sql.DB, error) {
-	connStr := "host=db port=5432 user=app_user password=app_password dbname=app_db sslmode=disable"
-	db, err := sql.Open("postgres", connStr)
+func New(connectionString string) (*Storage, error) {
+	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %v", err)
+		return nil, fmt.Errorf("%s: %w", "opening database connection: ", err)
 	}
 
-	// Run migrations
-	if err := goose.Up(db.DB, "/app/migrations"); err != nil {
-		return nil, fmt.Errorf("failed to run migrations: %v", err)
-	}
+	return &Storage{DB: db}, nil
+}
 
-	return db, nil
+func (s *Storage) Stop() error {
+	return s.DB.Close()
+}
+
+func ApplyMigrations(s *Storage) error {
+	if err := goose.Up(s.DB, "migrations.sql"); err != nil {
+		return fmt.Errorf("failed to run migrations %v", err)
+	}
+	return nil
+}
+
+func NewRow(s *Storage, id int, name string, info JSONB) error {
+	stmt, err := s.DB.Prepare()
 }
