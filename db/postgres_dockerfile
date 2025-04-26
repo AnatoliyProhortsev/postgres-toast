@@ -50,5 +50,10 @@ RUN initdb -D /usr/local/pgsql/data
 # Открытие порта
 EXPOSE 5432
 
+# Включение pg_stat_statements
+COPY init.sql /docker-entrypoint-initdb.d/
+RUN echo "shared_preload_libraries = 'pg_stat_statements'" >> /usr/share/postgresql/postgresql.conf.sample
+RUN echo "pg_stat_statements.track = all" >> /usr/share/postgresql/postgresql.conf.sample
+
 # Команда для запуска PostgreSQL
 CMD ["postgres", "-D", "/usr/local/pgsql/data"]
