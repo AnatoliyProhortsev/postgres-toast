@@ -2,8 +2,8 @@ version: '3.8'
 services:
   postgres:
     build:
-      context: .
-      dockerfile: db/postgres_dockerfile
+      context: ./db
+      dockerfile: postgres_dockerfile
       args:
         - PG_REPO=https://github.com/postgrespro/postgres.git
         - PG_BRANCH=jsonb_toaster # PG_BRANCH=REL_17_STABLE
@@ -24,8 +24,8 @@ services:
 
   app:
     build:
-      context: .
-      dockerfile: app/service_dockerfile
+      context: ./app
+      dockerfile: service_dockerfile
     depends_on:
       - postgres
     environment:
@@ -34,6 +34,6 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=
       - POSTGRES_DB=postgres
-
+      - DATABASE_URL=postgres://postgres:@postgres:5432/postgres?sslmode=disable
 volumes:
   db_data:

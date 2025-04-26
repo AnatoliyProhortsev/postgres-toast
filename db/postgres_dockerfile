@@ -17,43 +17,37 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Аргумент для указания ссылки на репозиторий
+# Аргументы сборки
 ARG PG_REPO
-
-# Аргумент для указания названия ветки
 ARG PG_BRANCH
 
-# Клонирование репозитория PostgreSQL и сборка
+# Клонирование и сборка Postgres
 RUN git clone --branch ${PG_BRANCH} --depth 2 ${PG_REPO} /postgres && \
     cd /postgres && \
     ./configure --prefix=/usr/local/pgsql && \
     make -j$(nproc) && \
-    make install && \
-    cd / && \
-    rm -rf /postgres
+    make install
 
 # Создание пользователя и директорий
 RUN useradd -m -s /bin/bash postgres && \
     mkdir -p /usr/local/pgsql/data && \
     chown -R postgres:postgres /usr/local/pgsql
 
-# Установка переменных окружения
+# Переменные окружения
 ENV PATH=/usr/local/pgsql/bin:$PATH
 ENV PGDATA=/usr/local/pgsql/data
 
 # Переключение на пользователя postgres
 USER postgres
 
-# Инициализация базы данных
+# Инициализация базы
 RUN initdb -D /usr/local/pgsql/data
+
+# Настройка конфигурации
+RUN echo "shared_preload_libraries = ''" >> /usr/local/pgsql/data/postgresql.conf
 
 # Открытие порта
 EXPOSE 5432
 
-# Включение pg_stat_statements
-COPY init.sql /docker-entrypoint-initdb.d/
-RUN echo "shared_preload_libraries = 'pg_stat_statements'" >> /usr/share/postgresql/postgresql.conf.sample
-RUN echo "pg_stat_statements.track = all" >> /usr/share/postgresql/postgresql.conf.sample
-
-# Команда для запуска PostgreSQL
+# Запуск Postgres
 CMD ["postgres", "-D", "/usr/local/pgsql/data"]
