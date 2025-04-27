@@ -60,10 +60,29 @@ func (s *Storage) Stop() error {
 
 // ApplyMigrations выполняет SQL-миграции из файла migrations.sql
 func ApplyMigrations(s *Storage) error {
+	if s == nil || s.DB == nil || s.DB.DB == nil {
+		return fmt.Errorf("ApplyMigrations: invalid storage provided")
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed t get working directory: %w", err)
+	}
+	fmt.Println("working directory: ", wd)
+
+	files, err := os.ReadDir("./migrations")
+	if err != nil {
+		return fmt.Errorf("cannot read migrations directory: %w", err)
+	}
+	fmt.Printf("Found %d files in migrations:\n", len(files))
+	for _, f := range files {
+		fmt.Println("  -", f.Name())
+	}
+
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("goose set dialect: %w", err)
 	}
-	if err := goose.Up(s.DB.DB, "migrations/"); err != nil {
+	if err := goose.Up(s.DB.DB, "./migrations"); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 	return nil
@@ -164,16 +183,27 @@ func getRowsHandler(s *Storage) http.HandlerFunc {
 func main() {
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://postgres@postgres:5432/postgres?sslmode=disable"
+		connStr = "postgres://postgres:pass@postgres:5432/postgres?sslmode=disable"
 	}
 
-	storage, err := New(connStr)
-	if err != nil {
-		log.Fatalf("cannot connect to db: %v", err)
-	}
-	defer storage.Stop()
+	var storage *Storage
+	var err error
 
-	if err := ApplyMigrations(storage); err != nil {
+	for {
+		storage, err = New(connStr)
+
+		if err == nil {
+			err = storage.DB.Ping()
+		}
+
+		if err == nil {
+			fmt.Println("Connected to DB")
+			defer storage.Stop()
+			break
+		}
+	}
+
+	if err = ApplyMigrations(storage); err != nil {
 		log.Fatalf("migrations failed: %v", err)
 	}
 

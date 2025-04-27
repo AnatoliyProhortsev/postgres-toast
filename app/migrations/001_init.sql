@@ -1,7 +1,9 @@
--- CREATE EXTENSION pg_stat_statements;
-DROP TABLE IF EXISTS test_table;
+-- +goose Up
 CREATE TABLE test_table (
     id SERIAL PRIMARY KEY,
     name varchar(100),
     info jsonb
 );
+
+-- +goose Down
+DROP TABLE IF EXISTS test_table;

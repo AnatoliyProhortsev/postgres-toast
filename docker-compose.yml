@@ -10,10 +10,10 @@ services:
     image: postgres:15
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 
+      POSTGRES_PASSWORD: pass
       POSTGRES_DB: postgres
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,12 +28,14 @@ services:
       dockerfile: service_dockerfile
     depends_on:
       - postgres
+    ports:
+      - "8080:8080"
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=
+      - POSTGRES_PASSWORD=pass
       - POSTGRES_DB=postgres
-      - DATABASE_URL=postgres://postgres:@postgres:5432/postgres?sslmode=disable
+      - DATABASE_URL=postgres://postgres:pass@postgres:5432/postgres?sslmode=disable
 volumes:
   db_data:
