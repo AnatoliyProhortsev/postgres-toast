@@ -1,12 +1,14 @@
 package main
 
 import (
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
@@ -38,8 +40,30 @@ type Row struct {
 	Info JSONB  `json:"info" db:"info"`
 }
 
-// Storage обёртка над sqlx.DB
-// Хранит соединение и методы для работы через структуру Row
+type DBStats struct {
+	Datname      sql.NullString `db:"datname"`
+	Numbackends  int            `json:"numbackends"`
+	XactCommit   int64          `json:"xact_commit"`
+	XactRollback int64          `json:"xact_rollback"`
+	BlksRead     int64          `json:"blks_read"`
+	BlksHit      int64          `json:"blks_hit"`
+}
+
+// ToastStats – статистика по TOAST
+type ToastStats struct {
+	TableName string `json:"table_name"`
+	// Размер TOAST-таблицы в байтах (можно дополнить и вывести в читаемом виде)
+	ToastSizeBytes  int64  `json:"toast_size_bytes"`
+	ToastSizePretty string `json:"toast_size_pretty"`
+}
+
+// FullStats объединяет обе статистики
+type AllStats struct {
+	DBStats    []DBStats    `json:"db_stats"`
+	ToastStats []ToastStats `json:"toast_stats"`
+}
+
+// Storage обёртка над sqlx.DB, хранит соединение и методы для работы с данными
 type Storage struct {
 	DB *sqlx.DB
 }
@@ -66,7 +90,7 @@ func ApplyMigrations(s *Storage) error {
 
 	wd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed t get working directory: %w", err)
+		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 	fmt.Println("working directory: ", wd)
 
@@ -121,6 +145,93 @@ func (s *Storage) GetAll() ([]Row, error) {
 		return nil, err
 	}
 	return rows, nil
+}
+
+// monitorDatabaseStats собирает статистику из базы каждые 10 секунд
+func monitorDatabaseStats(s *Storage) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		// Пример запроса к представлению pg_stat_database
+		query := `
+			SELECT COALESCE(datname, ''), numbackends, xact_commit, xact_rollback, blks_read, blks_hit
+			FROM pg_stat_database;
+		`
+		rows, err := s.DB.Query(query)
+		if err != nil {
+			log.Printf("Ошибка при сборе статистики: %v", err)
+			continue
+		}
+
+		log.Println("Статистика базы данных:")
+		for rows.Next() {
+			var datname string
+			var numbackends int
+			var xactCommit, xactRollback, blksRead, blksHit int64
+			if err := rows.Scan(&datname, &numbackends, &xactCommit, &xactRollback, &blksRead, &blksHit); err != nil {
+				log.Printf("Ошибка сканирования статистики: %v", err)
+				continue
+			}
+			log.Printf("БД: %s | Соединения: %d | Коммиты: %d | Откаты: %d | Чтения блоков: %d | Кэш попаданий: %d",
+				datname, numbackends, xactCommit, xactRollback, blksRead, blksHit)
+		}
+		rows.Close()
+	}
+}
+
+// statsFullHandler собирает и возвращает расширенную статистику, включая статистику TOAST
+func statsHandler(s *Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var fullStats AllStats
+
+		// Стандартная статистика базы
+		dbStatsRows, err := s.DB.Query(`
+			SELECT datname, numbackends, xact_commit, xact_rollback, blks_read, blks_hit
+			FROM pg_stat_database;
+		`)
+		if err != nil {
+			http.Error(w, "Ошибка при сборе статистики: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer dbStatsRows.Close()
+
+		for dbStatsRows.Next() {
+			var stats DBStats
+			if err := dbStatsRows.Scan(&stats.Datname, &stats.Numbackends, &stats.XactCommit, &stats.XactRollback, &stats.BlksRead, &stats.BlksHit); err != nil {
+				http.Error(w, "Ошибка чтения статистики: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			fullStats.DBStats = append(fullStats.DBStats, stats)
+		}
+
+		// Статистика по TOAST – размеры TOAST-таблиц для основных таблиц с TOAST
+		toastRows, err := s.DB.Query(`
+			SELECT
+			  c.relname AS table_name,
+			  pg_relation_size(c.reltoastrelid) AS toast_size_bytes,
+			  pg_size_pretty(pg_relation_size(c.reltoastrelid)) AS toast_size_pretty
+			FROM pg_class c
+			WHERE c.reltoastrelid <> 0;
+		`)
+		if err != nil {
+			http.Error(w, "Ошибка при сборе статистики TOAST: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer toastRows.Close()
+
+		for toastRows.Next() {
+			var ts ToastStats
+			if err := toastRows.Scan(&ts.TableName, &ts.ToastSizeBytes, &ts.ToastSizePretty); err != nil {
+				http.Error(w, "Ошибка чтения статистики TOAST: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			fullStats.ToastStats = append(fullStats.ToastStats, ts)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(fullStats)
+	}
 }
 
 // HTTP-обработчики
@@ -189,29 +300,36 @@ func main() {
 	var storage *Storage
 	var err error
 
+	// Пытаемся установить подключение к базе данных
 	for {
 		storage, err = New(connStr)
-
 		if err == nil {
 			err = storage.DB.Ping()
 		}
-
 		if err == nil {
 			fmt.Println("Connected to DB")
 			defer storage.Stop()
 			break
 		}
+		// Если не удалось подключиться, повторяем попытку
+		time.Sleep(2 * time.Second)
 	}
 
+	// Выполнение миграций
 	if err = ApplyMigrations(storage); err != nil {
 		log.Fatalf("migrations failed: %v", err)
 	}
 
+	// Запуск горутины для сбора статистики с БД каждые 10 секунд
+	go monitorDatabaseStats(storage)
+
+	// Инициализация маршрутов HTTP API
 	r := mux.NewRouter()
 	r.HandleFunc("/addRow", addRowHandler(storage)).Methods("POST")
 	r.HandleFunc("/deleteRow/{id}", deleteRowHandler(storage)).Methods("DELETE")
 	r.HandleFunc("/updateRow", updateRowHandler(storage)).Methods("PUT")
 	r.HandleFunc("/getRows", getRowsHandler(storage)).Methods("GET")
+	r.HandleFunc("/stats", statsHandler(storage)).Methods("GET")
 
 	addr := ":8080"
 	log.Printf("Listening on %s...", addr)

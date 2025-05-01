@@ -1,0 +1,30 @@
+# Этап сборки (builder)
+FROM golang:1.23.6 as builder
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Копируем go.mod и go.sum для загрузки зависимостей
+COPY go.mod ./
+RUN go mod download
+
+# Копируем исходный код сервиса монитора
+COPY . .
+
+# Собираем бинарный файл; CGO отключён для получения статического бинарника
+RUN CGO_ENABLED=0 go build -o monitor .
+
+# Этап выполнения (runtime)
+FROM alpine:latest
+
+# Создаем рабочую директорию
+WORKDIR /app
+
+# Копируем бинарник из этапа сборки
+COPY --from=builder /app/monitor /usr/local/bin/monitor
+
+# При необходимости устанавливаем дополнительные пакеты (например, tzdata для временной зоны)
+RUN apk add --no-cache tzdata
+
+# Определяем команду запуска сервиса
+ENTRYPOINT ["/usr/local/bin/monitor"]

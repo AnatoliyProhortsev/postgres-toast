@@ -37,5 +37,31 @@ services:
       - POSTGRES_PASSWORD=pass
       - POSTGRES_DB=postgres
       - DATABASE_URL=postgres://postgres:pass@postgres:5432/postgres?sslmode=disable
+
+  loadgen:
+    build:
+      context: ./workload
+      dockerfile: workloader_dockerfile
+    depends_on:
+      - app
+    ports:
+      - "8090:8090"  # порт для API динамического обновления конфигурации loadgen
+    environment:
+      - MAIN_SERVICE_URL=http://app:8080
+    restart: on-failure
+
+  monitor:
+    build:
+      context: ./monitor
+      dockerfile: monitor_dockerfile
+    depends_on:
+      - app
+    environment:
+      - APP_HOST=app
+      - APP_PORT=8080
+    volumes:
+      - monitor_data:/localhost/stats
+
 volumes:
   db_data:
+  monitor_data:

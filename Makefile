@@ -1,4 +1,4 @@
-toasted: clean build-toasted build-app run
+toasted: clean build-toasted build-app build-workload build-monitor run
 original: clean build-original build-app save-postgres save-app run
 
 clean:
@@ -12,6 +12,12 @@ build-original:
 
 build-app:
 	docker build -f app/service_dockerfile -t my_app app
+
+build-workload:
+	docker build -f workload/workloader_dockerfile -t my_workload workload
+
+build-monitor:
+	docker build -f monitor/monitor_dockerfile -t my_monitor monitor
 
 save-app:
 	docker save -o app.tar my_app
