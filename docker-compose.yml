@@ -2,7 +2,7 @@ version: '3.8'
 services:
   postgres:
     build:
-      context: .
+      context: ./db
       dockerfile: postgres_dockerfile
       args:
         - PG_REPO=https://github.com/postgrespro/postgres.git
@@ -10,12 +10,12 @@ services:
     image: postgres:15
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 
+      POSTGRES_PASSWORD: pass
       POSTGRES_DB: postgres
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - db_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -24,19 +24,33 @@ services:
 
   app:
     build:
-      context: .
+      context: ./app
       dockerfile: service_dockerfile
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
+    ports:
+      - "8080:8080"
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=
+      - POSTGRES_PASSWORD=pass
       - POSTGRES_DB=postgres
-    volumes:
-      - .:/app
+      - DATABASE_URL=postgres://postgres:pass@postgres:5432/postgres?sslmode=disable
+
+  loadgen:
+    build:
+      context: ./workload
+      dockerfile: workloader_dockerfile
+    depends_on:
+      - app
+      - postgres
+    ports:
+      - "8090:8090"  # порт для API динамического обновления конфигурации loadgen
+    environment:
+      - MAIN_SERVICE_URL=http://app:8080
+    restart: on-failure
 
 volumes:
-  postgres_data:
+  db_data:
+  monitor_data:

@@ -1,0 +1,36 @@
+# Stage 1: сборка приложения
+FROM golang:1.23.6 as builder
+
+# Устанавливаем рабочую директорию внутри контейнера
+WORKDIR /app
+
+# Копируем go.mod и go.sum для кеширования зависимостей
+COPY go.mod ./
+RUN go mod download
+
+# Копируем исходники
+COPY . .
+
+# Компилируем приложение; используется оптимизация для уменьшения размера бинарника
+RUN CGO_ENABLED=0 go build -o loadgen .
+
+# Stage 2: минимальный образ для запуска приложения
+FROM alpine:latest
+
+# Копируем бинарник из builder-сегмента
+COPY --from=builder /app/loadgen /usr/local/bin/loadgen
+
+# Опционально: добавить временную зону, если потребуется (например, для логирования)
+RUN apk add --no-cache tzdata
+
+# Задаём рабочую директорию
+WORKDIR /app
+
+# Устанавливаем переменную окружения для URL основного сервиса (можно переопределить при запуске)
+ENV MAIN_SERVICE_URL=http://main_service:8080
+
+# Открываем порты (например, 8090 для API конфигурации)
+EXPOSE 8090
+
+# Запускаем приложение
+ENTRYPOINT ["/usr/local/bin/loadgen"]
