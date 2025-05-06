@@ -1,4 +1,4 @@
-toasted: clean build-toasted build-app build-workload build-monitor run
+toasted: clean build-toasted build-app build-workload run
 original: clean build-original build-app save-postgres save-app run
 
 clean:

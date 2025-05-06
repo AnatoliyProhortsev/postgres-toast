@@ -128,7 +128,6 @@ func (lg *LoadGenerator) doAddRow(baseURL string) {
 	url := baseURL + "/addRow"
 	// Формируем тестовую запись. id генерируем случайно, name – на основе id, info – случайный JSON.
 	payload := map[string]interface{}{
-		"id":   rand.Intn(1000000),
 		"name": fmt.Sprintf("User_%d", rand.Intn(1000000)),
 		"info": json.RawMessage(lg.generateJSON()),
 	}
@@ -310,8 +309,8 @@ func main() {
 		UpdateRowRPS:   5,
 		DeleteRowRPS:   2,
 		GetRowsRPS:     3,
-		NumJSONFields:  3,
-		StrFieldLength: 15,
+		NumJSONFields:  5,
+		StrFieldLength: 1000,
 	}
 
 	loadGen := NewLoadGenerator(cfg)

@@ -51,16 +51,22 @@ type DBStats struct {
 
 // ToastStats – статистика по TOAST
 type ToastStats struct {
-	TableName string `json:"table_name"`
-	// Размер TOAST-таблицы в байтах (можно дополнить и вывести в читаемом виде)
+	TableName       string `json:"table_name"`
 	ToastSizeBytes  int64  `json:"toast_size_bytes"`
 	ToastSizePretty string `json:"toast_size_pretty"`
 }
 
 // FullStats объединяет обе статистики
 type AllStats struct {
-	DBStats    []DBStats    `json:"db_stats"`
-	ToastStats []ToastStats `json:"toast_stats"`
+	DBStats            []DBStats    `json:"db_stats"`
+	ToastStats         []ToastStats `json:"toast_stats"`
+	AvgSelectTimeMs    float64      `json:"avg_select_time_ms"`
+	AvgInsertTimeMs    float64      `json:"avg_insert_time_ms"`
+	AvgUpdateTimeMs    float64      `json:"avg_update_time_ms"`
+	AvgDeleteTimeMs    float64      `json:"avg_delete_time_ms"`
+	AvgInsertSizeBytes float64      `json:"avg_insert_size_bytes"`
+	AvgUpdateSizeBytes float64      `json:"avg_update_size_bytes"`
+	AvgSelectSizeBytes float64      `json:"avg_select_size_bytes"`
 }
 
 // Storage обёртка над sqlx.DB, хранит соединение и методы для работы с данными
@@ -114,37 +120,114 @@ func ApplyMigrations(s *Storage) error {
 
 // Add добавляет новую запись, используя абстракцию Row
 func (s *Storage) Add(r Row) error {
-	_, err := s.DB.NamedExec(
-		`INSERT INTO test_table (id, name, info) VALUES (:id, :name, :info)`,
+	start := time.Now()
+
+	// Вычисляем размер JSONB в байтах
+	infoBytes, err := json.Marshal(r.Info)
+	if err != nil {
+		log.Printf("failed to marshal JSONB: %v", err)
+		return fmt.Errorf("failed to marshal JSONB: %w", err)
+	}
+	jsonbSize := len(infoBytes)
+
+	_, err = s.DB.NamedExec(
+		`INSERT INTO test_table (name, info) VALUES (:name, :info)`,
 		r,
 	)
+
+	if err != nil {
+		return err
+	}
+
+	durationMs := int64(time.Since(start).Nanoseconds())
+
+	_, err = s.DB.Exec(`INSERT INTO request_log (request_type, duration_ms, raw_bytes) VALUES ($1, $2, $3)`, 4, durationMs, jsonbSize)
+	if err != nil {
+		log.Printf("(Add) Error while inserting request_log: %v", err)
+	}
+
 	return err
 }
 
 // Delete удаляет запись по ID
 func (s *Storage) Delete(id int) error {
-	_, err := s.DB.Exec(
-		`DELETE FROM test_table WHERE id = $1`, id,
-	)
+	start := time.Now()
+
+	_, err := s.DB.Exec(`DELETE FROM test_table WHERE id = $1`, id)
+
+	if err != nil {
+		return err
+	}
+
+	durationMs := int64(time.Since(start).Nanoseconds())
+
+	_, err = s.DB.Exec(`INSERT INTO request_log (request_type, duration_ms) VALUES ($1, $2)`, 3, durationMs)
+	if err != nil {
+		log.Printf("(Delete) Error while inserting request_log: %v", err)
+	}
+
 	return err
 }
 
 // Update обновляет запись по ID, используя абстракцию Row
 func (s *Storage) Update(r Row) error {
-	_, err := s.DB.NamedExec(
-		`UPDATE test_table SET name = :name, info = :info WHERE id = :id`,
-		r,
-	)
+	start := time.Now()
+
+	// Вычисляем размер JSONB в байтах
+	infoBytes, err := json.Marshal(r.Info)
+	if err != nil {
+		log.Printf("failed to marshal JSONB: %v", err)
+		return fmt.Errorf("failed to marshal JSONB: %w", err)
+	}
+	jsonbSize := len(infoBytes)
+
+	_, err = s.DB.NamedExec(`UPDATE test_table SET name = :name, info = :info WHERE id = :id`, r)
+
+	if err != nil {
+		return err
+	}
+
+	durationMs := int64(time.Since(start).Nanoseconds())
+
+	_, err = s.DB.Exec(`INSERT INTO request_log (request_type, duration_ms, raw_bytes) VALUES ($1, $2, $3)`, 2, durationMs, jsonbSize)
+	if err != nil {
+		log.Printf("(Update) Error while inserting request_log: %v", err)
+	}
+
 	return err
 }
 
 // GetAll возвращает все записи из test_table
 func (s *Storage) GetAll() ([]Row, error) {
+	start := time.Now()
 	var rows []Row
-	if err := s.DB.Select(&rows, `SELECT id, name, info FROM test_table`); err != nil {
-		return nil, err
+	err := s.DB.Select(&rows, `SELECT id, name, info FROM test_table`)
+
+	if err != nil {
+		return rows, err
 	}
-	return rows, nil
+
+	durationMs := int64(time.Since(start).Nanoseconds())
+
+	// Считаем суммарный размер всех jsonb
+	totalSize := 0
+	for _, row := range rows {
+		infoBytes, err := json.Marshal(row.Info)
+		if err != nil {
+			log.Printf("(GetAll) failed to marshal JSONB: %v", err)
+			continue
+		}
+		totalSize += len(infoBytes)
+	}
+
+	_, err = s.DB.Exec(`INSERT INTO request_log (request_type, duration_ms, raw_bytes) VALUES ($1, $2, $3)`, 1, durationMs, totalSize)
+
+	if err != nil {
+		log.Print("(GetAll) Error while inserting request_log: %w", err)
+		return rows, err
+	}
+
+	return rows, err
 }
 
 // monitorDatabaseStats собирает статистику из базы каждые 10 секунд
@@ -199,13 +282,14 @@ func statsHandler(s *Storage) http.HandlerFunc {
 		for dbStatsRows.Next() {
 			var stats DBStats
 			if err := dbStatsRows.Scan(&stats.Datname, &stats.Numbackends, &stats.XactCommit, &stats.XactRollback, &stats.BlksRead, &stats.BlksHit); err != nil {
+				log.Printf("Failed to fetch database stats: %v", err)
 				http.Error(w, "Ошибка чтения статистики: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 			fullStats.DBStats = append(fullStats.DBStats, stats)
 		}
 
-		// Статистика по TOAST – размеры TOAST-таблиц для основных таблиц с TOAST
+		// Статистика по TOAST
 		toastRows, err := s.DB.Query(`
 			SELECT
 			  c.relname AS table_name,
@@ -215,6 +299,7 @@ func statsHandler(s *Storage) http.HandlerFunc {
 			WHERE c.reltoastrelid <> 0;
 		`)
 		if err != nil {
+			log.Printf("Failed to fetch table stats: %v", err)
 			http.Error(w, "Ошибка при сборе статистики TOAST: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -223,14 +308,54 @@ func statsHandler(s *Storage) http.HandlerFunc {
 		for toastRows.Next() {
 			var ts ToastStats
 			if err := toastRows.Scan(&ts.TableName, &ts.ToastSizeBytes, &ts.ToastSizePretty); err != nil {
+				log.Printf("Failed to read TOAST statistics: %v", err)
 				http.Error(w, "Ошибка чтения статистики TOAST: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 			fullStats.ToastStats = append(fullStats.ToastStats, ts)
 		}
 
+		// Вычисление среднего времени по каждому типу запроса
+		type avgResult struct {
+			RequestType int     `db:"request_type"`
+			AvgDuration float64 `db:"avg_duration"`
+			AvgRawBytes float64 `db:"avg_raw_bytes"`
+		}
+		var averages []avgResult
+		err = s.DB.Select(&averages, `
+			SELECT request_type,
+			 COALESCE(AVG(duration_ms), 0) AS avg_duration,
+			 COALESCE(AVG(raw_bytes), 0) AS avg_raw_bytes
+			FROM request_log
+			GROUP BY request_type
+		`)
+		if err != nil {
+			log.Printf("(statsHandler) error: %v", err)
+			http.Error(w, "Ошибка при чтении логов запросов: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Заполняем поля среднего времени
+		for _, avg := range averages {
+			switch avg.RequestType {
+			case 1:
+				fullStats.AvgSelectTimeMs = avg.AvgDuration
+				fullStats.AvgSelectSizeBytes = avg.AvgRawBytes
+			case 2:
+				fullStats.AvgUpdateTimeMs = avg.AvgDuration
+				fullStats.AvgUpdateSizeBytes = avg.AvgRawBytes
+			case 3:
+				fullStats.AvgDeleteTimeMs = avg.AvgDuration
+			case 4:
+				fullStats.AvgInsertSizeBytes = avg.AvgRawBytes
+				fullStats.AvgInsertTimeMs = avg.AvgDuration
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(fullStats)
+		if err := json.NewEncoder(w).Encode(fullStats); err != nil {
+			http.Error(w, "Ошибка сериализации JSON: "+err.Error(), http.StatusInternalServerError)
+		}
 	}
 }
 
@@ -243,6 +368,7 @@ func addRowHandler(s *Storage) http.HandlerFunc {
 			return
 		}
 		if err := s.Add(row); err != nil {
+			log.Printf("(addRowHandler) error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -257,6 +383,7 @@ func deleteRowHandler(s *Storage) http.HandlerFunc {
 			fmt.Sscanf(mux.Vars(r)["id"], "%d", &id)
 		}
 		if err := s.Delete(id); err != nil {
+			log.Printf("(deleteRowHandler) error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -268,10 +395,12 @@ func updateRowHandler(s *Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var row Row
 		if err := json.NewDecoder(r.Body).Decode(&row); err != nil {
+			log.Printf("(updateRowHandler) 1 error: %v", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if err := s.Update(row); err != nil {
+			log.Printf("(updateRowHandler) 2 error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -283,6 +412,7 @@ func getRowsHandler(s *Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.GetAll()
 		if err != nil {
+			log.Printf("(getRowsHandler) error: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
