@@ -123,7 +123,7 @@ func startStatsCollector(mainServiceURL, exportDir string) {
 		log.Fatalf("Ошибка создания каталога экспорта: %v", err)
 	}
 
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -271,16 +271,16 @@ func chartHandler(w http.ResponseWriter, r *http.Request) {
 	page.AddCharts(avgTimeLine)
 
 	// График: зависимость времени от размера JSONB
-	var selectTimePerSize []opts.ScatterData
+	var selectTimePerSize []opts.LineData
 	for _, snap := range localSnapshots {
 		if snap.AvgSelectSizeBytes > 0 {
-			selectTimePerSize = append(selectTimePerSize, opts.ScatterData{
+			selectTimePerSize = append(selectTimePerSize, opts.LineData{
 				Value: [2]interface{}{snap.AvgSelectSizeBytes, snap.AvgSelectTimeMs},
 			})
 		}
 	}
 
-	scatter := charts.NewScatter()
+	scatter := charts.NewLine()
 	scatter.SetGlobalOptions(
 		charts.WithTitleOpts(opts.Title{
 			Title: "Время запроса vs. Размер JSONB",
@@ -288,8 +288,6 @@ func chartHandler(w http.ResponseWriter, r *http.Request) {
 		charts.WithXAxisOpts(opts.XAxis{Type: "value", Name: "Размер JSONB (байт)"}),
 		charts.WithYAxisOpts(opts.YAxis{Type: "value", Name: "Время (нс)"}),
 	)
-	// scatter.AddSeries("INSERT", insertTimePerSize)
-	// scatter.AddSeries("UPDATE", updateTimePerSize)
 	scatter.AddSeries("SELECT", selectTimePerSize)
 
 	page.AddCharts(scatter)

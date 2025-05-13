@@ -1,2 +1,5 @@
 go.mod
 go.sum
+monitor/export
+monitor/exportToasted
+monitor/exportOriginal
