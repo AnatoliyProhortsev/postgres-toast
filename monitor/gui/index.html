@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Monitor GUI</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    canvas { max-width: 600px; margin-bottom: 40px; }
+  </style>
+</head>
+<body>
+  <h1>Monitor GUI</h1>
+  <p id="status">Connecting...</p>
+  <canvas id="queryChart"></canvas>
+  <canvas id="toastChart"></canvas>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const queryCtx = document.getElementById('queryChart').getContext('2d');
+    const toastCtx = document.getElementById('toastChart').getContext('2d');
+
+    // Карта типов → цвета
+    const typeColors = {
+      0: '#4caf50',  // зелёный -> imdb_id
+      1: '#ff9800',  // оранжевый -> k_height
+      2: '#f44336'   // красный -> k_roles
+    };
+
+    const queryChart = new Chart(queryCtx, {
+      type: 'scatter',
+      data: {
+        datasets: [{
+          label: 'QueryStat',
+          data: [],
+          pointBackgroundColor: [],
+          pointBorderColor: [],
+          pointRadius: 3   // уменьшили радиус
+        }]
+      },
+      options: {
+        scales: {
+          x: { type: 'linear', title: { display: true, text: 'Size (bytes)' } },
+          y: { title: { display: true, text: 'Time (ms)' } }
+        }
+      }
+    });
+
+    const toastChart = new Chart(toastCtx, {
+      type: 'bar',
+      data: { labels: [], datasets: [{ label: 'ToastSizeBytes', data: [] }] },
+      options: {
+        scales: { y: { title: { display: true, text: 'Size (bytes)' } } }
+      }
+    });
+
+    async function fetchAndUpdate() {
+      try {
+        const res = await fetch('/stats');
+        if (!res.ok) throw new Error(res.status);
+        const stat = await res.json();
+        statusEl.textContent = 'Connected at ' + new Date().toLocaleTimeString();
+
+        // Scatter: разбираем size, time и тип
+        const pts = stat.query_stat.points.map(p => ({
+          x: p.size,
+          y: p.time
+        }));
+        const cols = stat.query_stat.points.map(p =>
+          typeColors[p.key] || '#000000'
+        );
+
+        const ds = queryChart.data.datasets[0];
+        ds.data = pts;
+        ds.pointBackgroundColor = cols;
+        ds.pointBorderColor = cols;
+        queryChart.update();
+
+        // Toast
+        const now = new Date().toLocaleTimeString();
+        toastChart.data.labels.push(now);
+        toastChart.data.datasets[0].data.push(stat.toast_stat.toast_size_bytes);
+        if (toastChart.data.labels.length > 20) {
+          toastChart.data.labels.shift();
+          toastChart.data.datasets[0].data.shift();
+        }
+        toastChart.update();
+
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e;
+      }
+    }
+
+    setInterval(fetchAndUpdate, 2000);
+    fetchAndUpdate();
+  </script>
+</body>
+</html>

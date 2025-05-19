@@ -27,7 +27,7 @@ RUN apk add --no-cache tzdata
 WORKDIR /app
 
 # Устанавливаем переменную окружения для URL основного сервиса (можно переопределить при запуске)
-ENV MAIN_SERVICE_URL=http://main_service:8080
+ENV MAIN_SERVICE_URL=http://app:8080
 
 # Открываем порты (например, 8090 для API конфигурации)
 EXPOSE 8090
