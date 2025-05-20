@@ -6,8 +6,8 @@ services:
       dockerfile: postgres_dockerfile
       args:
         - PG_REPO=https://github.com/postgrespro/postgres.git
-        - PG_BRANCH=PG_BRANCH=REL_17_STABLE
-    image: postgres:15
+        - PG_BRANCH=PG_BRANCH=jsonb_toaster
+    image: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: pass

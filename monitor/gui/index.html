@@ -5,21 +5,37 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Monitor GUI</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
-    canvas { max-width: 600px; margin-bottom: 40px; }
+    label { margin-right: 10px; }
+    input { width: 80px; }
+    canvas { display: block; margin-top: 20px; max-width: 100%; max-height: 100%;}
   </style>
 </head>
+
 <body>
   <h1>Monitor GUI</h1>
+  <!-- Текст статуса страницы -->
   <p id="status">Connecting...</p>
+  <!-- Поля для ввода границ -->
+  <div id="controls">
+    <label>X min: <input id="xMin" type="number" step="1" placeholder="auto"></label>
+    <label>X max: <input id="xMax" type="number" step="1" placeholder="auto"></label>
+    <label>Y min: <input id="yMin" type="number" step="1" placeholder="auto"></label>
+    <label>Y max: <input id="yMax" type="number" step="1" placeholder="auto"></label>
+    <button id="applyBtn">Применить</button>
+    <button id="resetBtn">Сбросить</button>
+  </div>
   <canvas id="queryChart"></canvas>
-  <canvas id="toastChart"></canvas>
+  <p id="toast_label">Размер Toast таблиц:</p>
 
   <script>
     const statusEl = document.getElementById('status');
-    const queryCtx = document.getElementById('queryChart').getContext('2d');
-    const toastCtx = document.getElementById('toastChart').getContext('2d');
+    const queryChartCtx = document.getElementById('queryChart').getContext('2d');
+    const toastEl = document.getElementById('toast_label');
+
+    Chart.register(ChartZoom);
 
     // Карта типов → цвета
     const typeColors = {
@@ -28,7 +44,7 @@
       2: '#f44336'   // красный -> k_roles
     };
 
-    const queryChart = new Chart(queryCtx, {
+    const queryChart = new Chart(queryChartCtx, {
       type: 'scatter',
       data: {
         datasets: [{
@@ -36,22 +52,31 @@
           data: [],
           pointBackgroundColor: [],
           pointBorderColor: [],
-          pointRadius: 3   // уменьшили радиус
+          pointRadius: 1
         }]
       },
       options: {
         scales: {
-          x: { type: 'linear', title: { display: true, text: 'Size (bytes)' } },
-          y: { title: { display: true, text: 'Time (ms)' } }
-        }
-      }
-    });
-
-    const toastChart = new Chart(toastCtx, {
-      type: 'bar',
-      data: { labels: [], datasets: [{ label: 'ToastSizeBytes', data: [] }] },
-      options: {
-        scales: { y: { title: { display: true, text: 'Size (bytes)' } } }
+          x: {
+            type: 'linear',
+            title: { display: true, text: 'Size (bytes)' },
+          },
+          y: {
+            title: { display: true, text: 'Time (µs)' },
+          }
+        },
+        plugins: {
+          zoom: {
+            pan: {
+              enabled: true,
+              mode: 'xy',         // направление: 'x', 'y' или 'xy'
+            },
+            zoom: {
+              pan:   { enabled: true, mode: 'xy' },
+              zoom:  { wheel: { enabled: true }, mode: 'xy' }
+            }
+          }
+        },
       }
     });
 
@@ -63,36 +88,75 @@
         statusEl.textContent = 'Connected at ' + new Date().toLocaleTimeString();
 
         // Scatter: разбираем size, time и тип
+        statusEl.textContent = 'Reading points map'
         const pts = stat.query_stat.points.map(p => ({
           x: p.size,
           y: p.time
         }));
+        
+        statusEl.textContent = 'Reading colors map'
         const cols = stat.query_stat.points.map(p =>
           typeColors[p.key] || '#000000'
         );
-
+        
+        statusEl.textContent = 'Sarted updating chart'
         const ds = queryChart.data.datasets[0];
         ds.data = pts;
         ds.pointBackgroundColor = cols;
         ds.pointBorderColor = cols;
         queryChart.update();
+        statusEl.textContent = 'Chart Updated'
 
         // Toast
-        const now = new Date().toLocaleTimeString();
-        toastChart.data.labels.push(now);
-        toastChart.data.datasets[0].data.push(stat.toast_stat.toast_size_bytes);
-        if (toastChart.data.labels.length > 20) {
-          toastChart.data.labels.shift();
-          toastChart.data.datasets[0].data.shift();
-        }
-        toastChart.update();
-
+        toastEl.textContent = 'Размер Toast таблиц: ' + stat.toast_stat.toast_size_bytes + ' байт'
+        statusEl.textContent = 'Toast size Updated'
       } catch (e) {
         statusEl.textContent = 'Error: ' + e;
       }
     }
 
-    setInterval(fetchAndUpdate, 2000);
+    // применять введённые границы
+    document.getElementById('applyBtn').addEventListener('click', () => {
+      const xMin = parseFloat(document.getElementById('xMin').value);
+      const xMax = parseFloat(document.getElementById('xMax').value);
+      const yMin = parseFloat(document.getElementById('yMin').value);
+      const yMax = parseFloat(document.getElementById('yMax').value);
+
+      // сброс текущего зума
+      if (queryChart.resetZoom) {
+        queryChart.resetZoom();
+      }
+
+      // если введено число — устанавливаем, иначе удаляем свойство
+      if (!isNaN(xMin)) queryChart.options.scales.x.min = xMin;
+      else delete queryChart.options.scales.x.min;
+      if (!isNaN(xMax)) queryChart.options.scales.x.max = xMax;
+      else delete queryChart.options.scales.x.max;
+      if (!isNaN(yMin)) queryChart.options.scales.y.min = yMin;
+      else delete queryChart.options.scales.y.min;
+      if (!isNaN(yMax)) queryChart.options.scales.y.max = yMax;
+      else delete queryChart.options.scales.y.max;
+
+      queryChart.update();
+    });
+
+    // сброс всех ограничений и зума
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      // очистим поля
+      ['xMin','xMax','yMin','yMax'].forEach(id => {
+        document.getElementById(id).value = '';
+      });
+      // удалим min/max
+      delete queryChart.options.scales.x.min;
+      delete queryChart.options.scales.x.max;
+      delete queryChart.options.scales.y.min;
+      delete queryChart.options.scales.y.max;
+      // сбросим zoom и перерисуем
+      if (queryChart.resetZoom) queryChart.resetZoom();
+      queryChart.update();
+    });
+
+    setInterval(fetchAndUpdate, 15000);
     fetchAndUpdate();
   </script>
 </body>

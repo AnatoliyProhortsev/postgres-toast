@@ -61,10 +61,10 @@ const (
 	k_roles                  // Вторнику присваивается 2, прирост относительно понедельника
 )
 
-// - нформация об одном запросе - время и размер jsonb
+// - информация об одном запросе - время и размер jsonb
 type QueryInfo struct {
 	Size int64   `json:"size"`
-	Time int     `json:"time"`
+	Time int64   `json:"time"`
 	Key  InfoKey `json:"key"`
 }
 
@@ -101,7 +101,7 @@ type RoleDetails struct {
 
 // ------------------------ Internal functions ------------
 // - INSERT request log (duration_ms, raw_bytes)
-func (s *Storage) InsertRequestLog(duration_ms int, raw_bytes int64) {
+func (s *Storage) InsertRequestLog(duration_ms int64, raw_bytes int64) {
 	_, err := s.DB.Exec(
 		`INSERT INTO request_log (duration_ms, raw_bytes)
              VALUES ($1, $2)`,
@@ -190,15 +190,13 @@ func (s *Storage) MeasureSelectPerformance(limit int) (QueryStatPacket, error) {
 			log.Printf("(MeasureSelectPerformance) failed to select imdb_id. row id: %d err:%v", ri.ID, err)
 		}
 		// - значение таймера
-		timeDur := time.Since(start).Milliseconds()
-		durationMs := int(timeDur)
+		timeDur := time.Since(start).Microseconds()
+		durationUs := timeDur
 
-		// - логируем в request_log
-		s.InsertRequestLog(durationMs, int64(ri.JsonbSizeBytes))
 		// - добавляем в массив точек
 		points = append(points, QueryInfo{
 			Size: ri.JsonbSizeBytes,
-			Time: durationMs,
+			Time: durationUs,
 			Key:  k_imdb_id,
 		})
 
@@ -211,15 +209,13 @@ func (s *Storage) MeasureSelectPerformance(limit int) (QueryStatPacket, error) {
 			log.Printf("(MeasureSelectPerformance) failed to select height. row id: %d err:%v", ri.ID, err)
 		}
 		// - значение таймера
-		timeDur = time.Since(start).Milliseconds()
-		durationMs = int(timeDur)
+		timeDur = time.Since(start).Microseconds()
+		durationUs = timeDur
 
-		// - логируем в request_log
-		s.InsertRequestLog(durationMs, int64(ri.JsonbSizeBytes))
 		// - добавляем в массив точек
 		points = append(points, QueryInfo{
 			Size: ri.JsonbSizeBytes,
-			Time: durationMs,
+			Time: durationUs,
 			Key:  k_height,
 		})
 
@@ -232,17 +228,19 @@ func (s *Storage) MeasureSelectPerformance(limit int) (QueryStatPacket, error) {
 			log.Printf("(MeasureSelectPerformance) failed measure 'roles' key. row id: %d err:%v", ri.ID, err)
 		}
 		// - значение таймера
-		timeDur = time.Since(start).Milliseconds()
-		durationMs = int(timeDur)
+		timeDur = time.Since(start).Microseconds()
+		durationUs = timeDur
 
-		// - логируем в request_log
-		s.InsertRequestLog(durationMs, int64(ri.JsonbSizeBytes))
 		// - добавляем в массив точек
 		points = append(points, QueryInfo{
 			Size: ri.JsonbSizeBytes,
-			Time: durationMs,
+			Time: durationUs,
 			Key:  k_roles,
 		})
+	}
+	// Проверка на пустой массив точек
+	if len(points) == 0 {
+		return QueryStatPacket{}, fmt.Errorf("empty points array")
 	}
 
 	// Заворачиваем массив точек в пакет
@@ -350,11 +348,10 @@ func (s *Storage) GetAll() ([]Row, error) {
 // - SELECT pg_relation_size
 func (s *Storage) GetToastTablesSize() (int64, error) {
 	toastRows, err := s.DB.Query(`
-			SELECT
-			  c.relname AS table_name,
-			  pg_relation_size(c.reltoastrelid) AS toast_size_bytes
-			FROM pg_class c
-			WHERE c.relname = 'postgres' AND c.reltoastrelid <> 0;
+			SELECT 
+			(pg_relation_size(reltoastrelid)) AS toast_table_size
+			FROM pg_class
+			WHERE relname = 'test_table';
 		`)
 	if err != nil {
 		log.Printf("Failed to fetch table stats: %v", err)
@@ -365,18 +362,13 @@ func (s *Storage) GetToastTablesSize() (int64, error) {
 	var resultSize int64
 
 	for toastRows.Next() {
-		var ts struct {
-			Size       int64
-			SizePretty int64
-			Name       string
-		}
-
-		if err := toastRows.Scan(&ts.Name, &ts.Size, &ts.SizePretty); err != nil {
+		if err := toastRows.Scan(&resultSize); err != nil {
 			log.Printf("Failed to read TOAST statistics: %v", err)
 			return 0, err
 		}
-		resultSize += ts.Size
+		log.Printf("Readed %d bytes toast table", resultSize)
 	}
+
 	return resultSize, nil
 }
 
@@ -394,7 +386,7 @@ func statsHandler(s *Storage) http.HandlerFunc {
 		toastPacket.ToastSizeBytes = size
 
 		// query_stat
-		queryPacket, err := s.MeasureSelectPerformance(1000)
+		queryPacket, err := s.MeasureSelectPerformance(0)
 		if err != nil {
 			log.Printf("(statsHandler) error: %v", err)
 			http.Error(w, "Ошибка при тестировании запросов: "+err.Error(), http.StatusInternalServerError)
@@ -507,11 +499,12 @@ func main() {
 			err = storage.DB.Ping()
 		}
 		if err == nil {
-			fmt.Println("Connected to DB")
+			fmt.Printf("Connected to DB\n")
 			defer storage.Stop()
 			break
 		}
 		// Если не удалось подключиться, повторяем попытку
+		fmt.Printf("Attempting to reconnect to DB\n")
 		time.Sleep(2 * time.Second)
 	}
 
