@@ -1,13 +1,13 @@
-build-toasted: clean go-init build-toasted build-app build-workload
-build-original: clean go-init build-original build-app build-workload
+build-toasted: clean go-init build-postgres-toasted build-app build-workload run
+build-original: clean go-init build-postgres-original build-app build-workload run
 
 clean:
 	docker-compose down --remove-orphans --volumes
 
-build-toasted:
+build-postgres-toasted:
 	docker build -f db/postgres_dockerfile --build-arg PG_REPO=https://github.com/postgrespro/postgres.git --build-arg PG_BRANCH=jsonb_toaster -t my_postgres db
 
-build-original:
+build-postgres-original:
 	docker build -f db/postgres_dockerfile --build-arg PG_REPO=https://github.com/postgrespro/postgres.git --build-arg PG_BRANCH=REL_17_STABLE -t my_postgres db
 
 build-app:
@@ -22,9 +22,21 @@ reinstall-app:
 	docker-compose up -d app
 
 reinstall-workload:
-	docker-compose stop workload
-	docker-compose build workload
-	docker-compose up -d workload
+	docker-compose stop loadgen
+	docker-compose build loadgen
+	docker-compose up -d loadgen
+
+reinstall-postgres-toasted:
+	docker-compose stop my_postgres
+	docker rm my_postgres
+	docker build -f db/postgres_dockerfile --build-arg PG_REPO=https://github.com/postgrespro/postgres.git --build-arg PG_BRANCH=jsonb_toaster -t my_postgres db
+	docker-compose up -d my_postgres
+
+reinstall-postgres-original:
+	docker-compose stop postgres
+	docker rm postgres
+	docker build -f db/postgres_dockerfile --build-arg PG_REPO=https://github.com/postgrespro/postgres.git --build-arg PG_BRANCH=REL_17_STABLE -t my_postgres db
+	docker-compose up -d postgres
 
 save-app:
 	docker save -o app.tar my_app

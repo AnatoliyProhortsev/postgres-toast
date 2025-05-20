@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -31,55 +32,93 @@ type RoleDetails struct {
 	Title string `json:"title"`
 }
 
-func main() {
-	fmt.Printf("Started\n")
-	// Параметры генерации
-	var (
-		serviceURL = flag.String("url", "http://app:8080", "Base URL основного сервиса")
-		nRecords   = flag.Int("n", 100, "Number of records to send")
-		minKB      = flag.Float64("min_kb", 0.1, "Минимальный размер JSON на запись, КБ")
-		maxMB      = flag.Float64("max_mb", 0.8, "Максимальный размер JSON на запись, МБ")
-		randomSize = flag.Bool("rand", true, "Использовать случайный размер между min и max")
-	)
-	flag.Parse()
+type AppParams struct {
+	ApiUrl   string
+	NRecords int
+	MinKB    float64
+	MaxMB    float64
+	IsRandom bool
+	Counter  int
+}
 
-	rand.Seed(time.Now().UnixNano())
+// Отправляет одну запись по HTTP
+func postRandomRecord(apiURL string, minKB, maxMB float64, isRandom bool, idx, total int) error {
+	// 1) Выбираем размер
+	target := chooseSize(minKB, maxMB, isRandom)
+	rec := generateRecord(target)
+	payload := LoadPayload{Info: rec}
 
-	fmt.Printf("Initted\n")
-
-	for i := 1; i <= *nRecords; i++ {
-		// выбираем целевой размер в байтах
-		target := chooseSize(*minKB, *maxMB, *randomSize)
-		rec := generateRecord(target)
-		payload := LoadPayload{
-			Info: rec,
-		}
-
-		// сериализуем
-		body, err := json.Marshal(payload)
-		if err != nil {
-			fmt.Printf("marshal payload error: %v\n", err)
-			continue
-		}
-
-		// POST /addRow
-		resp, err := http.Post(*serviceURL+"/addRow", "application/json", bytes.NewReader(body))
-		if err != nil {
-			fmt.Printf("HTTP POST error: %v\n", err)
-			continue
-		}
-		b, _ := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusCreated {
-			fmt.Printf("addRow failed: status=%d, body=%s\n", resp.StatusCode, string(b))
-		} else {
-			fmt.Printf("Sent %d/%d (target ~%.2f KB)\n", i, *nRecords, float64(len(body))/1024)
-		}
-		// небольшой рандомный сон
-		time.Sleep(100 * time.Millisecond)
+	// 2) Сериализуем
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload error: %w", err)
 	}
 
-	fmt.Printf("Loading done!\n")
+	// 3) Делаем POST
+	resp, err := http.Post(apiURL+"/addRow", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("HTTP POST error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	b, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("addRow failed: status=%d, body=%s", resp.StatusCode, string(b))
+	}
+
+	// 4) Логируем успех
+	fmt.Printf("[%d/%d] Sent ~%.2f KB\n", idx, total, float64(len(body))/1024.0)
+	return nil
+}
+
+func main() {
+	// Парсим флаги
+	url := flag.String("url", "http://app:8080", "Base URL основного сервиса")
+	n := flag.Int("n", 100000, "Number of records to send")
+	minKB := flag.Float64("min_kb", 0.001, "Минимальный размер JSON на запись, КБ")
+	maxMB := flag.Float64("max_mb", 1, "Максимальный размер JSON на запись, МБ")
+	isRand := flag.Bool("rand", true, "Использовать случайный размер между min и max")
+	flag.Parse()
+
+	params := AppParams{
+		ApiUrl:   *url,
+		NRecords: *n,
+		MinKB:    *minKB,
+		MaxMB:    *maxMB,
+		IsRandom: *isRand,
+	}
+	rand.Seed(time.Now().UnixNano())
+
+	fmt.Println("Started sending", params.NRecords, "records to", params.ApiUrl)
+
+	var wg sync.WaitGroup
+	// Семофор: не более 5 горутин одновременно
+	sem := make(chan struct{}, 5)
+
+	for i := 1; i <= params.NRecords; i++ {
+		wg.Add(1)
+		// Блокируемся, если уже 5 горутин "в работе"
+		sem <- struct{}{}
+
+		go func(idx int) {
+			defer wg.Done()
+			defer func() { <-sem }() // освобождаем слот по окончании
+
+			if err := postRandomRecord(
+				params.ApiUrl,
+				params.MinKB,
+				params.MaxMB,
+				params.IsRandom,
+				idx,
+				params.NRecords,
+			); err != nil {
+				fmt.Printf("[%d/%d] error: %v\n", idx, params.NRecords, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	fmt.Println("Loading done!")
 }
 
 // chooseSize возвращает целевой размер JSON в байтах
